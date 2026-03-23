@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mail-mock - Inbox</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; display: flex; height: 100vh; }
+
+        /* Sidebar - Email List */
+        .sidebar { width: 400px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; flex-shrink: 0; }
+        .sidebar-header { padding: 16px; border-bottom: 1px solid #ddd; background: #2563eb; color: #fff; }
+        .sidebar-header h1 { font-size: 18px; margin-bottom: 8px; }
+        .sidebar-header .stats { font-size: 12px; opacity: 0.8; }
+        .search-bar { padding: 8px 16px; border-bottom: 1px solid #eee; }
+        .search-bar input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none; }
+        .search-bar input:focus { border-color: #2563eb; }
+        .email-list { flex: 1; overflow-y: auto; }
+        .email-item { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.15s; }
+        .email-item:hover { background: #f0f7ff; }
+        .email-item.active { background: #e0eeff; border-left: 3px solid #2563eb; }
+        .email-item .from { font-weight: 600; font-size: 14px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .email-item .subject { font-size: 13px; color: #555; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .email-item .meta { font-size: 11px; color: #999; display: flex; justify-content: space-between; }
+        .empty-state { padding: 40px 16px; text-align: center; color: #999; }
+
+        /* Main Panel - Email Viewer */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .viewer-header { padding: 20px 24px; border-bottom: 1px solid #ddd; background: #fff; }
+        .viewer-header h2 { font-size: 20px; margin-bottom: 8px; }
+        .viewer-header .meta-row { font-size: 13px; color: #666; margin-bottom: 4px; }
+        .viewer-header .meta-row strong { color: #333; }
+        .viewer-tabs { display: flex; gap: 0; border-bottom: 1px solid #ddd; background: #fff; padding: 0 24px; }
+        .viewer-tabs button { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 13px; color: #666; border-bottom: 2px solid transparent; }
+        .viewer-tabs button.active { color: #2563eb; border-bottom-color: #2563eb; }
+        .viewer-body { flex: 1; overflow: auto; background: #fff; }
+        .viewer-body iframe { width: 100%; height: 100%; border: none; }
+        .viewer-body pre { padding: 20px 24px; white-space: pre-wrap; word-break: break-all; font-size: 13px; font-family: 'SF Mono', Consolas, monospace; }
+        .no-selection { display: flex; align-items: center; justify-content: center; height: 100%; background: #fff; color: #999; font-size: 16px; }
+        .toolbar { padding: 8px 24px; background: #fff; border-bottom: 1px solid #eee; display: flex; gap: 8px; }
+        .toolbar button { padding: 6px 14px; border: 1px solid #ddd; border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
+        .toolbar button:hover { background: #f0f0f0; }
+        .toolbar button.danger { color: #dc2626; border-color: #dc2626; }
+        .toolbar button.danger:hover { background: #fef2f2; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="sidebar-header">
+        <h1>mail-mock</h1>
+        <div class="stats">{{ total }} email(s) captured</div>
+    </div>
+    <div class="search-bar">
+        <form method="get" action="/">
+            <input type="text" name="q" placeholder="Search emails..." value="{{ search }}" />
+        </form>
+    </div>
+    <div class="email-list" id="emailList">
+        {% if emails %}
+            {% for em in emails %}
+            <div class="email-item" data-id="{{ em.id }}" onclick="selectEmail({{ em.id }})">
+                <div class="from">{{ em.sender or '(unknown sender)' }}</div>
+                <div class="subject">{{ em.subject }}</div>
+                <div class="meta">
+                    <span>{{ em.recipients_str }}</span>
+                    <span>{{ em.time_str }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="empty-state">
+                {% if search %}
+                    No emails matching "{{ search }}"
+                {% else %}
+                    No emails captured yet.<br>Send an email to localhost:1025 to get started.
+                {% endif %}
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="main" id="mainPanel">
+    <div class="no-selection" id="noSelection">
+        Select an email to view
+    </div>
+    <div id="emailViewer" style="display:none; flex:1; flex-direction:column;">
+        <div class="viewer-header" id="viewerHeader"></div>
+        <div class="toolbar">
+            <button onclick="showTab('html')">HTML</button>
+            <button onclick="showTab('text')">Text</button>
+            <button onclick="showTab('raw')">Raw Source</button>
+            <button class="danger" onclick="deleteEmail()">Delete</button>
+        </div>
+        <div class="viewer-body" id="viewerBody"></div>
+    </div>
+</div>
+
+<script>
+let currentId = null;
+
+async function selectEmail(id) {
+    currentId = id;
+
+    // Highlight active
+    document.querySelectorAll('.email-item').forEach(el => el.classList.remove('active'));
+    const active = document.querySelector(`.email-item[data-id="${id}"]`);
+    if (active) active.classList.add('active');
+
+    // Fetch email data
+    const resp = await fetch(`/api/emails/${id}`);
+    const email = await resp.json();
+
+    // Update header
+    document.getElementById('noSelection').style.display = 'none';
+    const viewer = document.getElementById('emailViewer');
+    viewer.style.display = 'flex';
+
+    document.getElementById('viewerHeader').innerHTML = `
+        <h2>${escapeHtml(email.subject)}</h2>
+        <div class="meta-row"><strong>From:</strong> ${escapeHtml(email.sender)}</div>
+        <div class="meta-row"><strong>To:</strong> ${escapeHtml(email.recipients.join(', '))}</div>
+        <div class="meta-row"><strong>Date:</strong> ${email.time_str}</div>
+        ${email.attachments.length > 0 ? `<div class="meta-row"><strong>Attachments:</strong> ${email.attachments.map(a => a.filename).join(', ')}</div>` : ''}
+    `;
+
+    showTab('html');
+}
+
+function showTab(tab) {
+    if (!currentId) return;
+    const body = document.getElementById('viewerBody');
+
+    if (tab === 'html') {
+        body.innerHTML = `<iframe src="/api/emails/${currentId}/html"></iframe>`;
+    } else if (tab === 'text') {
+        fetch(`/api/emails/${currentId}`)
+            .then(r => r.json())
+            .then(email => {
+                body.innerHTML = `<pre>${escapeHtml(email.text_body || '(no text body)')}</pre>`;
+            });
+    } else if (tab === 'raw') {
+        fetch(`/api/emails/${currentId}/raw`)
+            .then(r => r.text())
+            .then(raw => {
+                body.innerHTML = `<pre>${escapeHtml(raw)}</pre>`;
+            });
+    }
+}
+
+async function deleteEmail() {
+    if (!currentId) return;
+    if (!confirm('Delete this email?')) return;
+
+    await fetch(`/api/emails/${currentId}`, { method: 'DELETE' });
+    location.reload();
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+</script>
+
+</body>
+</html>
