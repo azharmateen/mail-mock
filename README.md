@@ -1,5 +1,8 @@
 # mail-mock
 
+[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blue?logo=anthropic&logoColor=white)](https://claude.ai/code)
+
+
 Local SMTP server to capture, inspect, and test emails during development. Like Mailhog/MailPit, but simpler.
 
 ## Installation
